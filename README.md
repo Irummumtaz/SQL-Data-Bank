@@ -1,6 +1,5 @@
 
-SQL Portfolio Project - Data Bank
-Mahnoor Fatima · 10 Feb, 2024
+
 Introduction
 There is a new innovation in the financial industry called Neo-Banks: new aged
 digital only banks without physical branches.
