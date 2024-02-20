@@ -9364,6 +9364,8 @@ Select count(distinct node_id) as Unique_Nodes
 from customer_nodes;
 
 #2. What is the number of nodes per region?
+ #-- This query selects the region ID and the count of nodes in each region from the 'Regions' table
+ 
 Select r.region_id,count(cn.node_id) Total_Nodes
 from Regions r
 Join customer_nodes CN on Cn.region_id=r.region_id
@@ -9371,6 +9373,7 @@ group by r.region_id
 Order by r.Region_id;
  
 #3. How many customers are allocated to each region?
+#-- This query selects the region ID, region name, and the count of customers in each region from the 'Regions' table, 
 Select r.region_id,r.region_name, count(cn.Customer_id) Total_Customers
 from Regions r
 Join customer_nodes cn on cn.region_id=r.region_id
@@ -9378,16 +9381,9 @@ group by r.region_id,r.region_name
 Order by r.region_id;
 
 #4. How many days on average are customers reallocated to a different node?
+#-- This query calculates the average number of days between 'Start_date' and 'End_date' for each unique node_id
+#-- from the 'customer_nodes' table where the end year is not equal to 9999.
 
-with numdays as (Select customer_id,Node_id,datediff(end_date,Start_date) as numberofdays,
-row_number() over (Partition by customer_id,node_id ) as rownum
-from customer_nodes
-where Year(end_date)<> 9999)
-Select Node_id,avg(numberofdays)
-from numdays
-group by Node_id
-Order by Node_id
-;
 with numdays as (Select customer_id,end_date,Node_id,datediff(end_date,Start_date) as numberofdays
 from customer_nodes)
 Select Node_id,round(avg(numberofdays)) AvgRelocate
@@ -9399,7 +9395,8 @@ Order by Node_id
 
 # What is the median, 80th and 95th percentile for this same reallocation
 #days metric for each region? 
-
+#-- This query calculates the median, 80th percentile, and 95th percentile of reallocation days 
+#-- (the difference between 'start_date' and 'end_date') for each region.
 with Reallocationdays as(
 Select cn.Customer_id,cn.Region_id,r.region_name,datediff(end_date,start_date) as RealloDays
 from customer_nodes cn
@@ -9422,12 +9419,16 @@ order by Region_Id;
 #  								                B . Customer Transactions
 
 #B.1. What is the unique count and total amount for each transaction type?
+#-- This query retrieves the count of unique transaction types, and the total transaction amount for each type 
+#-- from the 'customer_transactions' table.
+ 
 Select Txn_type, count(txn_type) as Unique_Count,sum(txn_amount) as Total_Amount
 From customer_transactions
 group by txn_type
 order by Total_Amount;
 
 #B.2. What is the average total historical deposit counts and amounts for all customers?
+#-- This query calculates the average total historical deposit counts and amounts for all customers.
 with Totaldp as(
 Select customer_id,sum(txn_amount) Dpamount,txn_type,count(txn_type) DpCount
 from customer_transactions
@@ -9441,6 +9442,7 @@ group by txn_type;
 
 #B.3. For each month - how many Data Bank customers make more than 1
 #deposit and either 1 purchase or 1 withdrawal in a single month? 
+#-- Common Table Expression (CTE) to calculate transaction counts by customer and month 
 
 with TxnMonth as
 (
@@ -9452,7 +9454,7 @@ Count(Case When Txn_type= 'Withdrawal' Then 1 Else 0  end) as WithdrawalCount
 from customer_transactions
 Group by customer_id,TMonth
 order by customer_id)
-Select TMonth,
+Select TMonth,             #-- It calculate active customers based on criteria
 Count( distinct Customer_id) as ActiveCustomer
 From txnMonth
 Where ( DepositCount >1 and 
@@ -9461,6 +9463,7 @@ group by Tmonth
 order by TMonth;
 
 #B.4. What is the closing balance for each customer at the end of the month?
+#-- Common Table Expression (CTE) to calculate the updated amount for each customer in each month
 with EachMonth as
 (
 Select Customer_id,
@@ -9471,11 +9474,12 @@ End) as UpdatedAmount
 from customer_transactions
 Group by customer_id,TMonth
 )
-Select Customer_id,tmonth,
+Select Customer_id,tmonth,      #-- Main query to calculate the closing balance for each customer in each month
 sum(UpdatedAmount) over (Partition by Customer_id order by Tmonth rows BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)  as ClosingBalance
 from EachMonth;
 
 #B.5. What is the percentage of customers who increase their closing balance by more than 5%?
+#-- Common Table Expression (CTE) to calculate the updated amount for each customer in each month
 with EachMonth as
 (
 Select Customer_id, count(distinct customer_id) as TotalCustomer,
@@ -9488,23 +9492,23 @@ from customer_transactions
 Where Year(Txn_date)<>9999
 Group by customer_id,TMonth,TYear
 ),
-ClosingBalance as(
+ClosingBalance as(                #-- CTE to calculate the closing balance for each customer in each month
 Select Customer_id,tmonth,
 sum(UpdatedAmount) over (Partition by Customer_id order by Tmonth rows BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)  as CBalance
 from EachMonth
 ),
-PreClosingBalance as(
+PreClosingBalance as(            #-- CTE to calculate the previous closing balance for each customer in each month
 Select Customer_id,tmonth,CBalance,
 Lag(Cbalance) over (Partition by Customer_id Order by Tmonth ) as Prebalance
 from  ClosingBalance
 ),
-PercentageIncrease As
+PercentageIncrease As           #-- CTE to filter percentage increase
 ( Select Customer_id,count(Customer_id) TransactionCount,
 tmonth,CBalance,PreBalance
 from PreClosingBalance
 Where  Cbalance >= (PreBalance + (PreBalance * 0.05)) And Cbalance >0
 Group by Customer_id,tmonth,CBalance,PreBalance)
-Select 100*count(distinct Pi.Customer_id)/nullif(Count(Em.Customer_id),0) Customer_Percentage
+Select 100*count(distinct Pi.Customer_id)/nullif(Count(Em.Customer_id),0) Customer_Percentage   #-- Final query to calculate customer percentage increase
 From PercentageIncrease PI
 join EachMonth Em on em.Customer_id=Pi.Customer_id
 ;
@@ -9512,7 +9516,7 @@ join EachMonth Em on em.Customer_id=Pi.Customer_id
 #                      				   C. Data Allocation Challenge
 
 #C.1. running customer balance column that includes the impact each transaction
-
+#-- Common Table Expression (CTE) to calculate the transaction amounts with signs adjusted for deposits and withdrawals
 With TAmount as (Select
 Customer_id,txn_date,
 Case 
@@ -9520,12 +9524,12 @@ When txn_type='deposit' then txn_amount
 Else -txn_amount 
 End as Amount
 From customer_transactions)
-Select  Customer_id,
+Select  Customer_id,           #-- Main query to calculate the running balance for each customer
 Sum(Amount) over (Partition by customer_id order by txn_date rows between unbounded preceding and current row) as RunningBalance
 From TAmount;
 
  #C.2. customer balance at the end of each month
-
+#-- Common Table Expression (CTE) to calculate the balance for each customer in each transaction month
 With TotalBalance as (Select Customer_id,
  month(Txn_date) TransactionMonth,
  Sum(Case When  txn_type='Deposit' Then txn_amount
@@ -9534,13 +9538,14 @@ With TotalBalance as (Select Customer_id,
  From customer_transactions
  group by Customer_id,TransactionMonth
  order by customer_id)
- select customer_id,TransactionMonth,
+ select customer_id,TransactionMonth,         #-- Main query to calculate the month-end balance for each customer
  Sum(Balance) over (partition by Customer_id Order by transactionMonth rows between unbounded preceding and current row)
  as MonthEndBalance
  From TotalBalance;
  
  #C.3. minimum, average and maximum values of the running balance for each customer
- 
+ #-- Common Table Expression (CTE) to calculate the transaction amounts with signs adjusted for deposits and withdrawals
+
 With TAmount as (Select
 Customer_id,txn_date,
 Case 
@@ -9549,11 +9554,11 @@ Else -txn_amount
 End as Amount
 From customer_transactions),
 RBalance as(
-Select  Customer_id,
+Select  Customer_id,      #-- CTE to calculate the running balance for each customer
 Sum(Amount) over (Partition by customer_id order by txn_date rows between unbounded preceding and current row) as RunningBalance
 From TAmount)
 Select
-Customer_id,
+Customer_id,              #-- Main query to calculate Avg,Min and Max of running balances for each customer
 min(RunningBalance)  as Min_Running_Balance,
 Avg(RunningBalance)  as Avg_Running_Balance,
 max(RunningBalance)  as Max_Running_Balance
@@ -9562,6 +9567,7 @@ Group by  Customer_id
 order by Customer_id;
 
 #Option 1: data is allocated based off the amount of money at the end of the previous month
+#-- Common Table Expression (CTE) to calculate the updated amount for each customer in each month
 with EachMonth as
 (
 Select Customer_id,
@@ -9574,18 +9580,18 @@ from customer_transactions
 #Where Year(Txn_date)<>9999
 Group by customer_id,TMonth,TYear
 ),
-CUrrentBalance as(
+CUrrentBalance as(    #-- CTE to calculate the running balance for each customer in each month
 Select Customer_id,tmonth,
 sum(UpdatedAmount) over (Partition by Customer_id order by Tmonth rows BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)  as CBalance
 from EachMonth
 ),
-PreviousBalance as(
+PreviousBalance as(    #-- CTE to calculate the previous month's balance for each customer
 Select Customer_id,tmonth,CBalance,
 Lag(Cbalance) over (Partition by Customer_id Order by Tmonth ) as Prebalance
 from  CurrentBalance
 )
 #TotalPreviousRunningBalance as(
-Select Tmonth,
+Select Tmonth,         #-- Main query to calculate the total previous running balance for each month
 Sum(Case When Prebalance>0 and Prebalance is not null Then Prebalance Else 0 End) as TotalPreRunningBalance
 From PreviousBalance
 group by Tmonth;
@@ -9593,7 +9599,7 @@ group by Tmonth;
 
 # Option 2: data is allocated on the average amount of money kept in the
 #account in the previous 30 days
-
+ #-- CTE to calculate the total balance for each customer in each transaction month
 With TotalBalance as (Select Customer_id,
  month(Txn_date) TransactionMonth,
  Sum(Case When  txn_type='Deposit' Then txn_amount
@@ -9602,18 +9608,18 @@ With TotalBalance as (Select Customer_id,
  From customer_transactions
  group by Customer_id,TransactionMonth
  order by customer_id),
- MonthEndBalance as(
+ MonthEndBalance as(          #-- CTE to calculate the month-end balance for each customer
  select customer_id,TransactionMonth,
  Sum(Balance) over (partition by Customer_id Order by transactionMonth rows between unbounded preceding and current row)
  as MonthEndBalance
  From TotalBalance),
- AvgMonBalance as(
+ AvgMonBalance as(            #-- CTE to calculate the average monthly balance
  Select  TransactionMonth,
  Avg(MonthEndBalance) AvgRBalance
  From MonthEndBalance
  Group by  TransactionMonth
  )
- Select  TransactionMonth,
+ Select  TransactionMonth,    #-- Main query to calculate the data needed
 Sum(Case When AvgRBalance<0 Then 0 Else AvgRBalance End ) Data_Needed
  From AvgMonBalance
  Group by  TransactionMonth
@@ -9621,7 +9627,8 @@ Sum(Case When AvgRBalance<0 Then 0 Else AvgRBalance End ) Data_Needed
  ;
  
  #● Option 3: data is updated real-time
- 
+  
+#--Common Table Expression (CTE) to calculate the total balance for each customer in each transaction month
  With TotalBalance as (Select Customer_id,
  month(Txn_date) TransactionMonth,
  Sum(Case When  txn_type='Deposit' Then txn_amount
@@ -9630,12 +9637,12 @@ Sum(Case When AvgRBalance<0 Then 0 Else AvgRBalance End ) Data_Needed
  From customer_transactions
  group by Customer_id,TransactionMonth
  order by customer_id),
- MonthlyBalance as(
- select customer_id,TransactionMonth,
+ MonthlyBalance as(    #-- CTE to calculate the running balance for each customer in each transaction month
+ select customer_id,TransactionMonth,    
  Sum(Balance) over (partition by Customer_id Order by transactionMonth rows between unbounded preceding and current row)
  as MonthBalance
  From TotalBalance)
- Select  TransactionMonth,
+ Select  TransactionMonth,  #-- Main query to calculate the running balance for each transaction month
 Sum(MonthBalance) RunningBalance
  From MonthlyBalance
  Group by  TransactionMonth
